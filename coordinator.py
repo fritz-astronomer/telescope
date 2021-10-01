@@ -1,3 +1,4 @@
+import ast
 import json
 import logging
 import os
@@ -23,7 +24,9 @@ load_dotenv()
 def get_json_or_clean_str(o: str) -> Union[List, Dict]:
     try:
         return json.loads(o)
-    except (JSONDecodeError, TypeError):
+    except (JSONDecodeError, TypeError) as e:
+        logging.debug(e)
+        logging.debug(o)
         return o.strip().split('\n')
 
 
@@ -73,9 +76,10 @@ class KubernetesGetter(Getter):
 
         exec_res = stream(
             self.client.connect_get_namespaced_pod_exec,
-            name=self.name, namespace=self.namespace, command=cmd, container=self.container, stderr=True, stdin=False, stdout=True, tty=False
+            name=self.name, namespace=self.namespace, command=cmd, container=self.container,
+            stderr=True, stdin=False, stdout=True, tty=False
         )
-        return get_json_or_clean_str(exec_res)
+        return ast.literal_eval(exec_res)
 
     def get_report_key(self):
         return f"{self.context}|{self.namespace}|{self.name}"
@@ -145,10 +149,10 @@ def main(get_from_hosts=True, get_local=False):
                 logging.debug(f"Connecting to {len(hosts_of_type)} {host_type} hosts...")
                 if type(hosts_of_type) == list:
                     for host in hosts_of_type:
-                        getter = Getter.get_for_type(host_type)
+                        getter = Getter.get_for_type(host_type)(**host)
                         report_key = getter.get_report_key()
                         logging.info(f"Fetching airflow report from {host_type} host {report_key} ...")
-                        report[report_key] = getter(**host).get(inputs['airflow']['report'])
+                        report[report_key] = getter.get(inputs['airflow']['report'])
         report_f.write(json.dumps(report, default=str))
 
 

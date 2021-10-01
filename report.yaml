@@ -31,7 +31,7 @@ airflow:
   report:
   - /bin/sh
   - -c
-  - curl -ssl https://raw.githubusercontent.com/fritz-astronomer/telescope/json/airflow_debug_report.py | OUTPUT_FILENAME=- python
+  - curl -ssl https://raw.githubusercontent.com/fritz-astronomer/telescope/json/airflow_debug_report.py | PYTHONWARNINGS=ignore OUTPUT_FILENAME=- python
 preinstall:
 #  database: rf"""kubectl run psql --rm -it --restart=Never -n {namespace} --image {image} --command -- psql {conn.out} -qtc "select 'healthy';" """
 #  certificate: ""
