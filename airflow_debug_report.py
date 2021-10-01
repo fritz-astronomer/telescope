@@ -431,8 +431,7 @@ with DAG(dag_id="airflow_debug_report", start_date=datetime.datetime(2021, 1, 1)
 # Or by executing "python airflow_debug_report.py [filename]"
 if __name__ == "__main__":
     try:
-        output_filename = sys.argv[1] or os.getenv('OUTPUT_FILENAME')
-        report(filename=output_filename)
+        output_filename = sys.argv[1] if len(sys.argv) > 1 else os.getenv('OUTPUT_FILENAME')
+        report(filename=output_filename)  if output_filename else report()
     except Exception as e:
         logging.exception(e)
-        report()
