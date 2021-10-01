@@ -8,6 +8,7 @@ by exec-ing into your scheduler pod and running `python airflow_debug_report.py`
 import datetime
 import json
 import logging
+import os
 import socket
 import sys
 from abc import abstractmethod
@@ -430,7 +431,7 @@ with DAG(dag_id="airflow_debug_report", start_date=datetime.datetime(2021, 1, 1)
 # Or by executing "python airflow_debug_report.py [filename]"
 if __name__ == "__main__":
     try:
-        output_filename = sys.argv[1]
+        output_filename = sys.argv[1] or os.getenv('OUTPUT_FILENAME')
         report(filename=output_filename)
     except Exception as e:
         logging.exception(e)
