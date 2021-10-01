@@ -10,6 +10,8 @@ import json
 import logging
 import socket
 import sys
+from abc import abstractmethod
+from typing import Any
 
 import airflow.jobs.base_job
 from airflow import DAG
@@ -25,7 +27,13 @@ class AirflowReport:
     name = "Airflow Report base class"
 
     @classmethod
+    @abstractmethod
     def report_markdown(cls) -> str:
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def report_json(cls) -> Any:
         raise NotImplementedError
 
 
@@ -35,6 +43,10 @@ class AirflowVersionReport(AirflowReport):
     @classmethod
     def report_markdown(cls) -> str:
         return f"# {cls.name}\n{airflow.version.version}\n\n"
+
+    @classmethod
+    def report_json(cls) -> Any:
+        return cls.name, airflow.version.version
 
 
 class ProvidersReport(AirflowReport):
@@ -52,6 +64,17 @@ class ProvidersReport(AirflowReport):
         result += "\n"
         return result
 
+    @classmethod
+    def report_json(cls) -> Any:
+        from airflow.providers_manager import ProvidersManager
+
+        providers_manager = ProvidersManager()
+        result = []
+        for provider_version, provider_info in providers_manager.providers.values():
+            result.append({provider_info['package-name']: provider_version})
+
+        return cls.name, result
+
 
 class DateTimeReport(AirflowReport):
     name = "DATE & TIME (UTC)"
@@ -60,6 +83,10 @@ class DateTimeReport(AirflowReport):
     def report_markdown(cls) -> str:
         return f"# {cls.name}\n{datetime.datetime.utcnow()}\n\n"
 
+    @classmethod
+    def report_json(cls) -> Any:
+        return cls.name, datetime.datetime.utcnow()
+
 
 class HostnameReport(AirflowReport):
     name = "HOSTNAME"
@@ -67,6 +94,10 @@ class HostnameReport(AirflowReport):
     @classmethod
     def report_markdown(cls) -> str:
         return f"# {cls.name}\n{socket.gethostname()}\n\n"
+
+    @classmethod
+    def report_json(cls) -> Any:
+        return cls.name, socket.gethostname()
 
 
 class InstalledPackagesReport(AirflowReport):
@@ -83,6 +114,13 @@ class InstalledPackagesReport(AirflowReport):
 
         result += "\n"
         return result
+
+    @classmethod
+    def report_json(cls) -> Any:
+        import pkg_resources
+
+        packages = {pkg.key: pkg.version for pkg in pkg_resources.working_set}
+        return cls.name, packages
 
 
 class ConfigurationReport(AirflowReport):
@@ -116,6 +154,28 @@ class ConfigurationReport(AirflowReport):
         result += "\n"
         return result
 
+    @classmethod
+    def report_json(cls) -> Any:
+        from airflow.configuration import conf
+
+        running_configuration = []
+
+        # Additional list because these are currently not hidden by the SecretsMasker but might contain passwords
+        additional_hide_list = {
+            "AIRFLOW__CELERY__BROKER_URL",
+            "AIRFLOW__CELERY__FLOWER_BASIC_AUTH",
+            "AIRFLOW__CELERY__RESULT_BACKEND",
+            "AIRFLOW__CORE__SQL_ALCHEMY_CONN",
+        }
+        for section, options in conf.as_dict(display_source=True, display_sensitive=True).items():
+            for option, (value, config_source) in options.items():
+                airflow_env_var_key = f"AIRFLOW__{section.upper()}__{option.upper()}"
+                if should_hide_value_for_key(airflow_env_var_key) or airflow_env_var_key in additional_hide_list:
+                    running_configuration.append((section, option, "***", config_source))
+                else:
+                    running_configuration.append((section, option, value, config_source))
+        return cls.name, sorted(running_configuration)
+
 
 class AirflowEnvVarsReport(AirflowReport):
     name = "ENVIRONMENT VARIABLES"
@@ -141,6 +201,28 @@ class AirflowEnvVarsReport(AirflowReport):
         result += f"- {variables} variables set via environment variables\n"
         result += "\n"
         return result
+
+    @classmethod
+    def report_json(cls) -> Any:
+        import os
+
+        config_options = 0
+        connections = 0
+        variables = 0
+        for env_var in os.environ.keys():
+            if env_var.startswith("AIRFLOW__"):
+                config_options += 1
+            elif env_var.startswith("AIRFLOW_CONN_"):
+                connections += 1
+            elif env_var.startswith("AIRFLOW_VAR_"):
+                variables += 1
+
+        result = [
+            f"{config_options} configuration options set via environment variables",
+            f"{connections} connections set via environment variables",
+            f"{variables} variables set via environment variables"
+        ]
+        return cls.name, result
 
 
 class SchedulerReport(AirflowReport):
@@ -170,6 +252,25 @@ class SchedulerReport(AirflowReport):
         result += "\n"
         return result
 
+    @classmethod
+    @provide_session
+    def report_json(cls, session=None) -> Any:
+        scheduler_jobs = session.query(airflow.jobs.scheduler_job.SchedulerJob).all()
+        schedulers = []
+        for scheduler_job in scheduler_jobs:
+            schedulers.append(
+                {
+                    "state": scheduler_job.state,
+                    "start_date": scheduler_job.start_date.isoformat(),
+                    "end_date": scheduler_job.end_date.isoformat() if scheduler_job.end_date else None,
+                    "duration": str(scheduler_job.end_date - scheduler_job.start_date)
+                    if scheduler_job.end_date
+                    else None,
+                }
+            )
+        schedulers_new_to_old = sorted(schedulers, key=lambda k: k["start_date"], reverse=True)
+        return cls.name, schedulers_new_to_old
+
 
 class PoolsReport(AirflowReport):
     name = "POOLS"
@@ -182,6 +283,11 @@ class PoolsReport(AirflowReport):
             result += f"1. \<pool name obfuscated\>: {pool_stat}\n"
         result += "\n"
         return result
+
+    @classmethod
+    def report_json(cls) -> Any:
+        pool_stats = airflow.models.Pool.slots_stats()
+        return cls.name, pool_stats.values()
 
 
 class UsageStatsReport(AirflowReport):
@@ -235,6 +341,51 @@ class UsageStatsReport(AirflowReport):
         result += "\n"
         return result
 
+    @classmethod
+    @provide_session
+    def report_json(cls, session=None) -> Any:
+        # DAG stats
+        paused_dag_count = session.query(func.count()).filter(DagModel.is_paused, DagModel.is_active).scalar()
+        unpaused_dag_count = session.query(func.count()).filter(~DagModel.is_paused, DagModel.is_active).scalar()
+        dagfile_count = session.query(func.count(func.distinct(DagModel.fileloc))).filter(DagModel.is_active).scalar()
+        total_task_instances = session.query(TaskInstance).count()
+        task_instances_1_day = (
+            session.query(TaskInstance)
+                .filter(TaskInstance.start_date > timezone.utcnow() - datetime.timedelta(days=1))
+                .count()
+        )
+        task_instances_7_days = (
+            session.query(TaskInstance)
+                .filter(TaskInstance.start_date > timezone.utcnow() - datetime.timedelta(days=7))
+                .count()
+        )
+        task_instances_30_days = (
+            session.query(TaskInstance)
+                .filter(TaskInstance.start_date > timezone.utcnow() - datetime.timedelta(days=30))
+                .count()
+        )
+        task_instances_365_days = (
+            session.query(TaskInstance)
+                .filter(TaskInstance.start_date > timezone.utcnow() - datetime.timedelta(days=365))
+                .count()
+        )
+
+        return cls.name, {
+            "DAG Stats": [
+                f"{paused_dag_count + unpaused_dag_count} active DAGs",
+                f"{unpaused_dag_count} unpaused DAGs",
+                f"{paused_dag_count} paused DAGs",
+                f"{dagfile_count} DAG files"
+            ],
+            "Task Instance Stats": [
+                f"{total_task_instances} total task instances",
+                f"{task_instances_1_day} task instances in last 1 day",
+                f"{task_instances_7_days} task instances in last 7 days",
+                f"{task_instances_30_days} task instances in last 30 days",
+                f"{task_instances_365_days} task instances in last 365 days"
+            ]
+        }
+
 
 def report(filename: str = "airflow_debug_report.md"):
     reporters = [
@@ -249,17 +400,27 @@ def report(filename: str = "airflow_debug_report.md"):
         AirflowEnvVarsReport,
         UsageStatsReport,
     ]
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("<!-- This report was automatically generated -->\n")
-        for reporter in reporters:
-            try:
-                f.write(reporter.report_markdown())
-                logging.info("Reported %s", reporter.name)
-            except Exception as e:
-                logging.exception("Failed reporting %s", reporter.name)
-                logging.exception(e)
+    if filename != '-':
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("<!-- This report was automatically generated -->\n")
+            for reporter in reporters:
+                try:
+                    f.write(reporter.report_markdown())
+                    logging.info("Reported %s", reporter.name)
+                except Exception as e:
+                    logging.exception("Failed reporting %s", reporter.name)
+                    logging.exception(e)
 
-    logging.info("Your Airflow system dump was written to %s", filename)
+        logging.info("Your Airflow system dump was written to %s", filename)
+    else:
+        def try_reporter(r):
+            try:
+                return r.report_json()
+            except Exception as e:
+                logging.exception("Failed reporting %s", r.name)
+                logging.exception(e)
+                return r.name, str(e)
+        sys.stdout.write(json.dumps(dict([try_reporter(reporter) for reporter in reporters]), default=str))
 
 
 # You can run this script as an Airflow DAG...
@@ -271,5 +432,6 @@ if __name__ == "__main__":
     try:
         output_filename = sys.argv[1]
         report(filename=output_filename)
-    except:
+    except Exception as e:
+        logging.exception(e)
         report()
