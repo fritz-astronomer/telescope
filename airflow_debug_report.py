@@ -288,7 +288,7 @@ class PoolsReport(AirflowReport):
     @classmethod
     def report_json(cls) -> Any:
         pool_stats = airflow.models.Pool.slots_stats()
-        return cls.name, pool_stats.values()
+        return cls.name, pool_stats
 
 
 class UsageStatsReport(AirflowReport):
